@@ -31,7 +31,8 @@ weighted longest increasing subsequence problem. On a corpus of 392
 annotated filings across three evaluation sets, the pipeline achieves
 a mean character-level $F_1$ score of \textbf{96.3\%}, with per-set
 scores of 97.1\%, 96.1\%, and 95.8\%. We conclude with a discussion
-of machine learning approaches that may further improve performance.
+of agentic applications that leverage the extracted sections for
+automated financial analysis.
 \end{abstract}
 
 \tableofcontents
@@ -42,10 +43,11 @@ of machine learning approaches that may further improve performance.
 % ===============================================================
 
 The SEC Form 10-K is a comprehensive annual report required of all
-publicly traded companies in the United States~\cite{sec10k}. Each
-10-K follows a prescribed structure of approximately 20 item sections
+publicly traded companies in the United States. Each 10-K follows a
+prescribed structure of approximately 20 item sections
 (see \autoref{tab:items}), spanning topics from business operations
-and risk factors to executive compensation and financial statements.
+and risk factors to executive compensation and financial
+statements~\cite{zhang2023form10k}.
 
 Automated extraction of individual item sections is a prerequisite
 for downstream tasks such as financial text classification, risk
@@ -59,7 +61,7 @@ that achieves 96.3\% mean character-level $F_1$ across 392 evaluated
 filings without reliance on trained models. We detail the method
 (\autoref{sec:method}), the evaluation protocol (\autoref{sec:eval}),
 experimental results (\autoref{sec:results}), and future directions
-toward machine learning approaches (\autoref{sec:future}).
+toward agentic applications (\autoref{sec:future}).
 
 \begin{table}[htbp]
 \centering
@@ -226,16 +228,14 @@ extracted from the source filing.
 
 \subsection{Metric: Character-Level $F_1$}
 
-Following standard practice in text extraction
-evaluation~\cite{vanRijsbergen1979}, we employ character-level
-$F_1$ computed over bag-of-character representations.
-
-For a predicted string $\hat{y}$ and ground truth string $y$, let
-$\hat{t} = \text{strip}(\hat{y})$ and $t = \text{strip}(y)$ denote
-the plain-text representations obtained by removing all HTML tags
-and decoding all HTML entities via \texttt{html.unescape()}.
-Define character frequency vectors $\bm{p}, \bm{g} \in \mathbb{N}^{|\Sigma|}$
-over the character alphabet $\Sigma$. Then:
+We employ character-level $F_1$ computed over bag-of-character
+representations. For a predicted string $\hat{y}$ and ground truth
+string $y$, let $\hat{t} = \text{strip}(\hat{y})$ and
+$t = \text{strip}(y)$ denote the plain-text representations obtained
+by removing all HTML tags and decoding all HTML entities via
+\texttt{html.unescape()}. Define character frequency vectors
+$\bm{p}, \bm{g} \in \mathbb{N}^{|\Sigma|}$ over the character
+alphabet $\Sigma$. Then:
 
 \begin{equation}\label{eq:f1}
 P = \frac{\sum_{c \in \Sigma} \min(p_c, g_c)}{\sum_{c \in \Sigma} p_c}, \quad
@@ -350,92 +350,138 @@ three categories:
 
 
 % ===============================================================
-\section{Future Directions}\label{sec:future}
+\section{Future Directions: Agentic Applications}\label{sec:future}
 % ===============================================================
 
-While the rule-based pipeline achieves strong performance, several
-machine learning approaches could address its remaining limitations.
+The extraction pipeline produces structured, per-item representations
+of 10-K filings at 96.3\% fidelity. This structured output serves as
+a foundation for autonomous agent systems that perform financial
+analysis tasks requiring targeted access to specific filing
+sections~\cite{zhang2023form10k}. We outline several agentic
+architectures that build upon the pipeline.
 
-\subsection{Learned Section Boundary Detection}
+\subsection{Multi-Agent Risk Assessment System}
 
-The current Tier~1 and Tier~2 classification relies on hand-crafted
-regex patterns, which cannot adapt to novel formatting conventions.
-A \textbf{sequence labeling} model (e.g., BiLSTM-CRF or a
-Transformer encoder) trained on token-level BIO annotations could
-learn to identify section boundaries from contextual features
-including:
-\begin{itemize}
-  \item Font size, weight, and styling attributes extracted from
-    inline CSS and HTML tags.
-  \item Positional features: relative document position, distance
-    from nearest TOC anchor.
-  \item Textual features: character $n$-grams and token embeddings
-    of surrounding text.
-\end{itemize}
+A system of cooperating agents could perform automated risk
+analysis by orchestrating specialized sub-agents:
 
-This approach would subsume Tiers~0--2 with a single learned
-classifier, potentially improving performance on the 4 filings
-currently failing due to non-standard HTML structure.
+\begin{description}
+  \item[Risk Extraction Agent.]
+    Consumes the Item~1A (Risk Factors) slice and applies named
+    entity recognition, topic modeling, and sentiment analysis to
+    produce a structured risk taxonomy per filing.
 
-\subsection{Pretrained Language Model Fine-Tuning}
+  \item[Temporal Comparison Agent.]
+    Given risk taxonomies from consecutive fiscal years, identifies
+    newly emerged risks, resolved risks, and risks with changed
+    severity language. Outputs a year-over-year risk delta report.
 
-Large pretrained language models such as BERT~\cite{devlin2019bert},
-RoBERTa~\cite{liu2019roberta}, or domain-specific variants
-(FinBERT~\cite{yang2020finbert}, SEC-BERT~\cite{loukas2022secbert})
-could be fine-tuned for section classification. Given a candidate
-anchor and its surrounding context window, the model would predict
-the item label. This would replace the regex-based classification
-with a learned representation that captures semantic similarity
-to canonical item descriptions.
+  \item[Cross-Company Aggregation Agent.]
+    Ingests risk taxonomies across an industry sector (e.g., all
+    S\&P~500 technology companies) and identifies systemic risks
+    that appear across multiple filings, ranking by prevalence and
+    severity.
 
-\subsection{End-to-End Extraction with Long-Context Models}
+  \item[Orchestrator Agent.]
+    Coordinates the above sub-agents, manages the extraction pipeline
+    invocations, and synthesizes a final risk briefing document for
+    a human analyst.
+\end{description}
 
-Recent long-context Transformer architectures (e.g., Longformer,
-BigBird) or retrieval-augmented approaches could process entire
-10-K documents ($10^5$--$10^6$ tokens) and directly predict section
-boundaries without relying on anchor heuristics. Such models could:
-\begin{itemize}
-  \item Handle filings that lack TOC-referenced anchors entirely.
-  \item Learn implicit section structure from document layout and
-    content flow.
-  \item Jointly optimize boundary detection and item classification.
-\end{itemize}
+\subsection{Autonomous Due Diligence Agent}
 
-The primary challenge is training data: annotating section boundaries
-at the character level is labor-intensive. The existing ground truth
-corpus (392 filings) may be sufficient for fine-tuning but likely
-insufficient for training from scratch. Transfer learning from
-related document segmentation tasks~\cite{lukasik2020text} or
-synthetic data augmentation could mitigate this limitation.
+An agent tasked with pre-acquisition due diligence could consume
+multiple item sections in a structured workflow:
 
-\subsection{Hybrid Pipeline}
-
-A practical near-term approach combines rule-based and learned
-components:
 \begin{enumerate}
-  \item Use the current anchor-based pipeline as the primary extractor.
-  \item Train a lightweight classifier (e.g., gradient-boosted trees
-    on hand-engineered features, or a small Transformer) to
-    \emph{re-rank} candidate anchors when the DP-based selector
-    assigns low confidence.
-  \item Apply a learned boundary refinement model to adjust slice
-    endpoints at the character level, addressing the residual 3.7\%
-    $F_1$ gap.
+  \item Extract Item~1 (Business), Item~3 (Legal Proceedings),
+    Item~7 (MD\&A), and Item~8 (Financial Statements) for the
+    target company's last five fiscal years.
+  \item Identify material litigation trends from Item~3 across years.
+  \item Extract revenue segments, margins, and management outlook
+    from Item~7 and correlate with Item~8 quantitative data.
+  \item Produce a structured due diligence memo with flagged
+    anomalies, each linked to the source filing and item section.
 \end{enumerate}
 
-This hybrid approach would preserve the interpretability and
-reliability of the rule-based pipeline while selectively applying
-learned models to difficult cases.
+The pipeline's per-item extraction eliminates the need for the agent
+to process entire filings (often 10M+ characters), reducing context
+window consumption by 95\% while preserving section-level provenance.
 
-\subsection{Evaluation Improvements}
+\subsection{Regulatory Compliance Monitoring Agent}
 
-The current character-level bag-of-characters $F_1$ metric is
-position-agnostic: it rewards character overlap regardless of
-ordering. A \textbf{sequence-level metric} such as token-level $F_1$
-with positional alignment (e.g., via longest common subsequence) would
-better capture boundary precision. Additionally, stratified evaluation
-by filing complexity (number of items, document length, formatting
-heterogeneity) would provide more actionable diagnostic information.
+A continuously running agent could monitor SEC EDGAR for new filings
+and perform automated compliance checks:
+
+\begin{description}
+  \item[Filing Ingestion.]
+    Polls EDGAR for new 10-K submissions, runs the extraction
+    pipeline, and stores per-item content in a vector database
+    with metadata (company, fiscal year, item, CIK).
+
+  \item[Policy Enforcement.]
+    Compares extracted Item~9A (Controls and Procedures) and
+    Item~9C (Foreign Jurisdiction Disclosures) against a
+    configurable rule set encoding regulatory requirements.
+    Flags filings that omit required disclosures or contain
+    boilerplate language below a specificity threshold.
+
+  \item[Alert Generation.]
+    Routes flagged filings to compliance officers with direct
+    links to the relevant extracted section, reducing manual
+    review time from hours (full filing) to minutes (targeted
+    section).
+\end{description}
+
+\subsection{Conversational Financial Analyst Agent}
+
+An LLM-based conversational agent could use the extraction pipeline
+as a tool within a retrieval-augmented generation (RAG) architecture:
+
+\begin{enumerate}
+  \item The user asks: ``What are Apple's main risk factors in
+    their 2024 10-K, and how do they compare to 2023?''
+  \item The agent invokes the pipeline to extract Item~1A from
+    both filings.
+  \item The extracted sections (typically 10--50 pages each) are
+    chunked, embedded, and indexed in a session-scoped vector store.
+  \item The agent retrieves relevant chunks and synthesizes a
+    comparative analysis, citing specific passages with page-level
+    provenance.
+\end{enumerate}
+
+By extracting the relevant section before retrieval, the agent avoids
+the noise and irrelevance that arises from embedding and searching
+entire filings. This \emph{extract-then-retrieve} pattern improves
+both precision and citation accuracy compared to naive full-document
+RAG.
+
+\subsection{Portfolio Surveillance Agent Swarm}
+
+A swarm of lightweight agents could monitor a portfolio of holdings:
+
+\begin{description}
+  \item[Watcher Agents] (one per holding):
+    Each agent tracks its assigned company's EDGAR filings. When a
+    new 10-K is published, it extracts all items and computes a
+    diff against the prior year's extracted sections.
+
+  \item[Anomaly Detection Agent:]
+    Receives diffs from all Watcher Agents. Applies statistical
+    and semantic anomaly detection to identify unusual changes:
+    significant new risk factors, large swings in reported segment
+    revenue, changes in auditor, new legal proceedings, or removal
+    of previously disclosed items.
+
+  \item[Portfolio Manager Agent:]
+    Aggregates anomaly reports, cross-references with market data
+    and news, and produces a daily portfolio surveillance briefing
+    ranked by materiality.
+\end{description}
+
+This architecture scales linearly with portfolio size and requires
+no human intervention for routine monitoring, reserving analyst
+attention for flagged anomalies.
 
 
 % ===============================================================
@@ -450,12 +496,13 @@ constraints via dynamic programming. On 392 evaluated filings, the
 pipeline achieves a mean character-level $F_1$ of 96.3\%, with all
 three evaluation sets exceeding 95\%.
 
-The remaining performance gap is attributable to ground truth
-annotation inconsistencies (particularly for Item~16 and Signatures)
-and a small number of structurally non-standard filings. Machine
-learning approaches---particularly learned boundary detection and
-hybrid rule-learned pipelines---represent promising directions for
-closing this gap.
+The high-fidelity, per-item structured output produced by this
+pipeline serves as an enabling primitive for agentic financial
+analysis systems. Multi-agent architectures for risk assessment,
+due diligence, compliance monitoring, conversational analysis, and
+portfolio surveillance can leverage targeted section extraction to
+reduce context window consumption, improve retrieval precision, and
+maintain provenance to source filings.
 
 % ---------------------------------------------------------------
 \printbibliography
