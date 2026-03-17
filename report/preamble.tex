@@ -6,8 +6,8 @@
     doi=false, isbn=false, url=false, eprint=false,
     maxcitenames=1, mincitenames=1]{biblatex}
 
-% Cross-referencing
-\usepackage[pdftex,colorlinks]{hyperref}
+% Cross-referencing (black and white only)
+\usepackage[pdftex,colorlinks=false,pdfborder={0 0 0}]{hyperref}
 \def\sectionautorefname{Section}
 \def\subsectionautorefname{Section}
 \def\subsubsectionautorefname{Section}
@@ -19,7 +19,7 @@
 
 % Text utilities
 \usepackage[all]{nowidow}
-\usepackage[dvipsnames]{xcolor}
+\usepackage{xcolor}
 \usepackage{lipsum}
 \newcommand{\lightlipsum}[1][0]{\textcolor{gray!50}{\lipsum[#1]}}
 \usepackage{xspace}
@@ -40,13 +40,13 @@
 \usepackage{amssymb,amsfonts,amsmath,amscd}
 \usepackage{bm}
 
-% Code listings
+% Code listings (black and white)
 \usepackage{listings}
 \lstset{
   basicstyle=\ttfamily\small,
-  backgroundcolor=\color{gray!8},
+  backgroundcolor=\color{white},
   frame=single,
-  rulecolor=\color{gray!30},
+  rulecolor=\color{black},
   breaklines=true,
   columns=fullflexible,
   keepspaces=true,
@@ -56,37 +56,16 @@
   belowskip=8pt,
 }
 
-% Colored boxes for callouts
+% Black-and-white boxes
 \usepackage{tcolorbox}
 \tcbuselibrary{skins,breakable}
 
-\newtcolorbox{analogybox}{
-  colback=Goldenrod!8,
-  colframe=Goldenrod!60!black,
-  fonttitle=\bfseries,
-  title=Analogy,
-  breakable,
-  boxrule=0.5pt,
-  arc=2pt,
-  left=6pt, right=6pt, top=4pt, bottom=4pt,
-}
-
 \newtcolorbox{resultbox}{
-  colback=ForestGreen!8,
-  colframe=ForestGreen!60!black,
+  colback=white,
+  colframe=black,
   fonttitle=\bfseries,
   breakable,
-  boxrule=0.5pt,
-  arc=2pt,
-  left=6pt, right=6pt, top=4pt, bottom=4pt,
-}
-
-\newtcolorbox{warningbox}{
-  colback=BrickRed!8,
-  colframe=BrickRed!60!black,
-  fonttitle=\bfseries,
-  breakable,
-  boxrule=0.5pt,
-  arc=2pt,
+  boxrule=0.8pt,
+  arc=0pt,
   left=6pt, right=6pt, top=4pt, bottom=4pt,
 }
