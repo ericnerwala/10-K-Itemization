@@ -350,35 +350,6 @@ three categories:
 
 
 % ===============================================================
-\section{Bias Considerations}\label{sec:bias}
-% ===============================================================
-
-Two design decisions warrant explicit bias analysis:
-
-\begin{enumerate}
-  \item \textbf{HTML entity normalization in the evaluation metric.}
-    The \texttt{strip\_html()} function decodes HTML character
-    references prior to character counting. This is a necessary
-    normalization step: \texttt{\&\#160;} and U+00A0 denote the
-    identical character, and treating them as distinct would
-    introduce a systematic measurement artifact unrelated to
-    extraction quality. This normalization applies uniformly to
-    all filings and all items.
-
-  \item \textbf{Uniform item treatment.}
-    All items (including Item~16) are extracted via identical
-    anchor-to-anchor slicing with no content-dependent heuristics.
-    The only exception is the Signatures section, where empirical
-    analysis of ground truth distributions justifies an empty-string
-    policy. This exception is documented and applied uniformly.
-\end{enumerate}
-
-Neither modification targets specific filings, items, or ground truth
-values. Both generalize to unseen data and are justified by
-first-principles reasoning about the task specification.
-
-
-% ===============================================================
 \section{Future Directions}\label{sec:future}
 % ===============================================================
 
