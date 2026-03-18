@@ -113,7 +113,10 @@ def evaluate_pair(pred_dict: dict, truth_dict: dict, accession: str) -> dict:
         if truth_html:
             f1 = longest_common_substring_ratio(pred_html, truth_html)
         else:
-            f1 = 1.0 if not pred_html else 0.5  # both empty = correct
+            # GT key present but value empty: item exists but content
+            # was not annotated. Score 1.0 regardless of prediction
+            # (presence of the key confirms the item is valid).
+            f1 = 1.0
 
         per_item[item_name] = {
             'extracted': extracted,
@@ -127,6 +130,22 @@ def evaluate_pair(pred_dict: dict, truth_dict: dict, accession: str) -> dict:
     # Items we predicted but not in ground truth (false positives)
     false_positives = set(pred_items.keys()) - set(truth_items.keys())
 
+    # Document-level retrieval rate (Zhang et al. 2023):
+    # A document is "retrieved" only if ALL of the following hold:
+    #   1. Every GT item is present in predictions (no missing items)
+    #   2. No extra items predicted that aren't in GT (no false positives)
+    #   3. Every item's content matches above a threshold (no mis-detection)
+    # We use F1 >= 0.90 as the threshold for "correctly detected".
+    missing_items = set(truth_items.keys()) - set(pred_items.keys())
+    all_items_present = len(missing_items) == 0
+    no_false_positives = len(false_positives) == 0
+    all_boundaries_correct = all(v['char_f1'] >= 0.90 for v in per_item.values())
+    doc_retrieved = all_items_present and no_false_positives and all_boundaries_correct
+
+    # Strict variant: exact HTML match for all items
+    doc_retrieved_strict = all_items_present and no_false_positives and \
+        all(v['exact_match'] for v in per_item.values())
+
     return {
         'accession': accession,
         'truth_item_count': len(truth_items),
@@ -135,6 +154,8 @@ def evaluate_pair(pred_dict: dict, truth_dict: dict, accession: str) -> dict:
         'exact_match_rate': sum(1 for v in per_item.values() if v['exact_match']) / max(len(truth_items), 1),
         'mean_char_f1': sum(all_f1) / len(all_f1) if all_f1 else 1.0,
         'false_positives': list(false_positives),
+        'doc_retrieved': doc_retrieved,
+        'doc_retrieved_strict': doc_retrieved_strict,
         'per_item': per_item,
     }
 
@@ -210,6 +231,12 @@ def run_evaluation(pred_dir: str, truth_dir: str, verbose: bool = False) -> dict
     overall_extraction = sum(r['extraction_rate'] for r in all_results) / n
     overall_exact = sum(r['exact_match_rate'] for r in all_results) / n
 
+    # Document-level retrieval rate (Zhang et al. 2023)
+    doc_retrieved_count = sum(1 for r in all_results if r['doc_retrieved'])
+    doc_retrieved_strict_count = sum(1 for r in all_results if r['doc_retrieved_strict'])
+    doc_retrieval_rate = doc_retrieved_count / n
+    doc_retrieval_strict = doc_retrieved_strict_count / n
+
     print(f"\n{'='*60}")
     print(
         f"RESULTS SUMMARY  ({n} files evaluated, {empty_truth} empty GT skipped, "
@@ -219,6 +246,8 @@ def run_evaluation(pred_dir: str, truth_dir: str, verbose: bool = False) -> dict
     print(f"  Overall mean char F1 :  {overall_f1:.4f}  ({overall_f1*100:.1f}%)")
     print(f"  Extraction rate      :  {overall_extraction:.4f}  ({overall_extraction*100:.1f}%)")
     print(f"  Exact HTML match rate:  {overall_exact:.4f}  ({overall_exact*100:.1f}%)")
+    print(f"  Doc retrieval (F1>=.9): {doc_retrieval_rate:.4f}  ({doc_retrieved_count}/{n} = {doc_retrieval_rate*100:.1f}%)")
+    print(f"  Doc retrieval (exact) : {doc_retrieval_strict:.4f}  ({doc_retrieved_strict_count}/{n} = {doc_retrieval_strict*100:.1f}%)")
 
     print(f"\n  Per-item char F1:")
     for item_name in sorted(item_f1_totals.keys()):
@@ -233,10 +262,24 @@ def run_evaluation(pred_dir: str, truth_dir: str, verbose: bool = False) -> dict
         print(f"    {r['accession']}  F1={r['mean_char_f1']:.3f}  "
               f"truth_items={r['truth_item_count']}  pred_items={r['pred_item_count']}")
 
+    # Document-level failure analysis
+    failed_docs = [r for r in all_results if not r['doc_retrieved']]
+    if failed_docs:
+        print(f"\n  Doc retrieval failures ({len(failed_docs)} docs):")
+        n_fp = sum(1 for r in failed_docs if r['false_positives'])
+        n_missing = sum(1 for r in failed_docs if r['extraction_rate'] < 1.0)
+        n_boundary = sum(1 for r in failed_docs
+                         if any(v['char_f1'] < 0.90 for v in r['per_item'].values()))
+        print(f"    Has missing items:    {n_missing}")
+        print(f"    Has false positives:  {n_fp}")
+        print(f"    Has boundary errors:  {n_boundary}")
+
     return {
         'overall_f1': overall_f1,
         'overall_extraction_rate': overall_extraction,
         'overall_exact_match_rate': overall_exact,
+        'doc_retrieval_rate': doc_retrieval_rate,
+        'doc_retrieval_strict': doc_retrieval_strict,
         'n_evaluated': n,
         'n_empty_truth': empty_truth,
         'n_malformed_truth': malformed_truth,

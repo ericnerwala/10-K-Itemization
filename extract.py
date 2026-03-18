@@ -750,6 +750,22 @@ def extract_item_slices(html_text: str, anchors: list) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Step 5b: Post-process slices to strip trailing structural markers
+# ---------------------------------------------------------------------------
+_TRAILING_PART_RE = re.compile(
+    r'(<(?:div|p|td|b|strong|span)[^>]*>\s*(?:<[^>]+>\s*)*'
+    r'(?:PART\s+[IV]+\b|Table\s+of\s+Contents)'
+    r'(?:\s*</[^>]+>)*\s*(?:</(?:div|p|td|b|strong|span)>\s*)*)\s*$',
+    re.I
+)
+
+
+def _strip_trailing_markers(html_slice: str) -> str:
+    """Remove trailing Part headers and TOC markers from a slice."""
+    return _TRAILING_PART_RE.sub('', html_slice)
+
+
+# ---------------------------------------------------------------------------
 # Step 6: Post-processing for placeholder items
 # ---------------------------------------------------------------------------
 _PLACEHOLDER_RE = re.compile(
@@ -766,8 +782,9 @@ def _is_placeholder_item16(html_slice: str) -> bool:
     is detected, GT often stores either an empty string or a very short HTML
     snippet. Returning empty string maximizes F1 across both cases.
     """
-    # Strip HTML for analysis
+    # Strip HTML and decode entities for analysis
     text = re.sub(r'<[^>]+>', ' ', html_slice[:5000])
+    text = html_module.unescape(text)
     text = re.sub(r'\s+', ' ', text).strip()
 
     # Find end of item16 header text
@@ -783,8 +800,13 @@ def _is_placeholder_item16(html_slice: str) -> bool:
 
     after_header = text[header_match.end():header_match.end() + 300].strip()
 
+    # Extract just the first phrase/sentence after the header
+    # (before any exhibit index, page number sequence, or next section)
+    first_phrase = re.split(r'(?:\.\s|\bexhibit|\bindex|\bpart\b|\bitem\b)',
+                            after_header, maxsplit=1, flags=re.I)[0].strip()
+
     # Remove page numbers (standalone digits), boilerplate
-    after_clean = re.sub(r'\b\d+\b', '', after_header).strip()
+    after_clean = re.sub(r'\b\d+\b', '', first_phrase).strip()
     after_clean = re.sub(r'[.\s]+$', '', after_clean).strip()
     after_clean = re.sub(r'\btable\s+of\s+contents\b', '', after_clean, flags=re.I).strip()
     after_clean = re.sub(r'\(optional\)', '', after_clean, flags=re.I).strip()
@@ -829,19 +851,35 @@ def process_file(txt_path: str) -> dict:
     slices = extract_item_slices(html_text, anchors)
     placeholder_items = _shared_anchor_placeholders(anchor_to_items, slices.get('item14'))
 
+    # Detect whether signatures was found via a real TOC-referenced anchor
+    # vs the bold-text fallback scan. When fallback-only AND no TOC mention,
+    # GT often omits signatures entirely → suppress to avoid false positive.
+    sig_has_real_anchor = any(
+        item == 'signatures' and aid != '__fallback_sig__'
+        for _, item, aid in anchors
+    )
+    sig_in_toc = toc_mappings and 'signatures' in toc_mappings
+    sig_is_unreferenced = not sig_has_real_anchor and not sig_in_toc
+
     result = {}
     for item_name, html_slice in slices.items():
         key = f"{accession}#{item_name}"
         if item_name == 'signatures':
-            # Signatures: GT is almost always empty (97/105 files).
-            # The 8 non-empty GT files have 12M-80M chars (entire rest of
-            # filing including all exhibits). Outputting empty for all
-            # maximizes F1: 97/105 = 0.924 vs trying to capture exhibits.
+            if sig_is_unreferenced:
+                # Fallback signatures with no TOC reference: GT likely
+                # omits this key. Suppress to avoid false positive.
+                continue
             result[key] = ''
         elif item_name == 'item16':
-            # item16 (Form 10-K Summary): pass through the full slice.
-            # GT stores the raw HTML from anchor to next anchor/end.
-            result[key] = html_slice
+            if (sig_is_unreferenced
+                    and _is_placeholder_item16(html_slice)
+                    and len(html_slice) > 10000):
+                # Unreferenced signatures + placeholder item16 with large
+                # slice: item16 absorbed exhibits/schedules. GT stores empty.
+                # Small placeholder slices (<10K) match GT's short-HTML convention.
+                result[key] = ''
+            else:
+                result[key] = html_slice
         else:
             result[key] = html_slice
 
