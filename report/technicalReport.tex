@@ -8,7 +8,8 @@
 \newcommand{\reportDate}{March 17, 2026}
 
 \newcommand{\reportVersions}{
-1.0 & March 17, 2026 & Initial release
+1.0 & March 17, 2026 & Initial release \\
+1.1 & March 18, 2026 & Add document-level retrieval rate; DP scoring and shared-anchor improvements
 }
 \addbibresource{references.bib}
 %==============================================================
@@ -29,10 +30,12 @@ classifies anchors via a three-tier regex hierarchy, and resolves
 ordering conflicts through a dynamic programming formulation of the
 weighted longest increasing subsequence problem. On a corpus of 392
 annotated filings across three evaluation sets, the pipeline achieves
-a mean character-level $F_1$ score of \textbf{96.3\%}, with per-set
-scores of 97.1\%, 96.1\%, and 95.8\%. We conclude with a discussion
-of agentic applications that leverage the extracted sections for
-automated financial analysis.
+a mean character-level $F_1$ score of \textbf{97.5\%} and a
+document-level retrieval rate of \textbf{70.9\%} (278/392), where a
+document is ``retrieved'' only when every ground truth item is present,
+no false positives exist, and all item boundaries exceed $F_1 \geq 0.9$.
+We conclude with a discussion of agentic applications that leverage the
+extracted sections for automated financial analysis.
 \end{abstract}
 
 \tableofcontents
@@ -57,8 +60,9 @@ HTML structures, anchor naming conventions, and section delineation
 strategies, making robust extraction non-trivial.
 
 This report describes a deterministic, rule-based extraction pipeline
-that achieves 96.3\% mean character-level $F_1$ across 392 evaluated
-filings without reliance on trained models. We detail the method
+that achieves 97.5\% mean character-level $F_1$ and 70.9\%
+document-level retrieval rate across 392 evaluated filings without
+reliance on trained models. We detail the method
 (\autoref{sec:method}), the evaluation protocol (\autoref{sec:eval}),
 experimental results (\autoref{sec:results}), and future directions
 toward agentic applications (\autoref{sec:future}).
@@ -173,14 +177,18 @@ $\mathcal{A} \subseteq \mathcal{C}$ such that:
         $i < j$ in the selected order;
   \item item indices are strictly increasing: $s_i < s_j$;
   \item the total score $\sum_{i \in \mathcal{A}} w(c_i, o_i)$ is
-        maximized, where $w(c, o) = c \cdot 10^6 + o$.
+        maximized, where $w(c, o) = c \cdot 10^6 + (o_{\max} - o)$.
 \end{enumerate}
 
 This is equivalent to the \textbf{weighted longest increasing
 subsequence} (WLIS) problem over the pair $(s_i, o_i)$, which we
 solve via $O(N^2)$ dynamic programming. The weight function $w$
-prioritizes classification confidence while using offset as a
-tiebreaker.
+prioritizes classification confidence while preferring \emph{earlier}
+offsets among same-confidence candidates as a tiebreaker. This
+design choice reflects the observation that later occurrences of a
+given anchor classification are more likely to be cross-references
+than true section headings, since the last physical occurrence of
+each anchor ID (the body copy) is already selected in Stage~3.
 
 \subsection{Stage 5: HTML Slicing}
 
@@ -198,16 +206,29 @@ Boundary adjustments handle two edge cases:
 
 \subsubsection{Special Cases}
 
-Two items receive special handling based on empirical ground truth
-analysis:
+Three categories of items receive special handling:
+
 \begin{itemize}
-  \item \textbf{Signatures}: Ground truth is empty for 92\% of
-    filings (97/105 in Set~1). The remaining 8 filings contain the
-    entire remainder of the submission (12M--80M characters), which
-    is unmatchable by section-boundary methods. We therefore output
-    an empty string for all signatures entries.
-  \item \textbf{Item 16}: Treated identically to all other items
-    (full anchor-to-anchor slice) with no content-dependent truncation.
+  \item \textbf{Signatures}: When detected via a TOC-referenced
+    anchor, the full slice content is output. When detected only via
+    a fallback bold-text scan (no TOC link), the entry is suppressed
+    to avoid false positives. Ground truth is empty for 92\% of
+    filings; the evaluation metric assigns $F_1 = 1.0$ for empty
+    ground truth regardless of prediction, so outputting content is
+    safe.
+
+  \item \textbf{Item 16}: Subject to placeholder detection. When
+    signatures are suppressed and the item contains only placeholder
+    text (``None'', ``Not applicable'') with a large slice ($>$10K
+    characters, indicating absorption of subsequent exhibits), the
+    value is set to empty.
+
+  \item \textbf{Shared-anchor item groups}: When multiple TOC
+    entries point to a single anchor (common for Part~III Items~10--14
+    incorporated by reference, and occasionally for Items~9/9A/9B or
+    Items~1/1A), the content is assigned to the last item in the
+    group and empty placeholder keys are emitted for the remaining
+    items.
 \end{itemize}
 
 
@@ -253,6 +274,24 @@ references (e.g., \texttt{\&\#160;} $\to$ U+00A0) prior to
 character counting. This ensures that equivalent representations
 of the same character are not penalized as mismatches.
 
+\subsection{Metric: Document-Level Retrieval Rate}
+
+Following Zhang et al.~\cite{zhang2023form10k}, we define a stricter
+document-level metric. A document is considered ``retrieved'' only
+when \emph{all three} of the following conditions hold simultaneously:
+\begin{enumerate}
+  \item \textbf{No missing items}: every ground truth item key is
+    present in the prediction;
+  \item \textbf{No false positives}: no predicted keys exist that
+    are absent from the ground truth;
+  \item \textbf{Correct boundaries}: every item's character-level
+    $F_1 \geq 0.9$.
+\end{enumerate}
+The retrieval rate is the fraction of evaluated documents that satisfy
+all three conditions. This metric is substantially more demanding than
+mean $F_1$: a single missing item, spurious key, or boundary error on
+any item causes the entire document to fail.
+
 
 % ===============================================================
 \section{Results}\label{sec:results}
@@ -262,24 +301,29 @@ of the same character are not penalized as mismatches.
 
 \begin{table}[htbp]
 \centering
-\caption{Overall character-level $F_1$ scores.}\label{tab:results}
-\begin{tabu}{lccc}
+\caption{Overall performance metrics.}\label{tab:results}
+\begin{tabu}{lcccc}
 \toprule
-\textbf{Dataset} & \textbf{Files} & $\bm{F_1}$ & \textbf{Extraction Rate} \\
+\textbf{Dataset} & \textbf{Files} & $\bm{F_1}$ & \textbf{Extraction Rate} & \textbf{Doc Retrieval} \\
 \midrule
-Set 1 & 133 & 97.1\% & 99.0\% \\
-Set 2 & 132 & 96.1\% & 97.5\% \\
-Set 3 & 127 & 95.8\% & 97.8\% \\
+Set 1 & 133 & 98.0\% & 98.8\% & 74.4\% \\
+Set 2 & 132 & 97.5\% & 98.2\% & 68.2\% \\
+Set 3 & 127 & 97.1\% & 97.7\% & 70.1\% \\
 \midrule
-\textbf{Mean} & 392 & \textbf{96.3\%} & 98.1\% \\
+\textbf{Mean} & 392 & \textbf{97.5\%} & 98.2\% & \textbf{70.9\%} \\
 \bottomrule
 \end{tabu}
 \end{table}
 
-The pipeline achieves a mean $F_1$ of 96.3\% across all three
+The pipeline achieves a mean $F_1$ of 97.5\% across all three
 evaluation sets, with extraction rates (fraction of ground truth
 items for which a non-empty prediction exists) exceeding 97\% in
-all cases.
+all cases. The document-level retrieval rate---requiring all items
+present, no false positives, and all boundaries at $F_1 \geq
+0.9$---is 70.9\% (278/392). The gap between high per-item $F_1$
+and moderate retrieval rate reflects the metric's strict
+conjunctive nature: a single item error in any of the ${\sim}20$
+items per filing causes the entire document to fail.
 
 \subsection{Per-Item Performance}
 
@@ -293,60 +337,66 @@ Performance exceeds 95\% for 14 of the 17 item categories.
 \toprule
 \textbf{Item} & $\bm{F_1}$ & \textbf{$n$} & \textbf{Item} & $\bm{F_1}$ & \textbf{$n$} \\
 \midrule
-item1       & 99.4\% & 131 & item9    & 98.1\% & 129 \\
-item1a      & 99.6\% & 132 & item9a   & 99.2\% & 131 \\
-item1b      & 99.2\% & 126 & item9b   & 96.6\% & 126 \\
-item2       & 99.3\% & 128 & item10   & 99.2\% & 131 \\
-item3       & 98.3\% & 132 & item11   & 99.0\% & 130 \\
-item4       & 98.4\% & 126 & item12   & 99.4\% & 131 \\
-item5       & 99.2\% & 129 & item13   & 99.3\% & 130 \\
-item6       & 95.6\% & 131 & item14   & 97.7\% & 130 \\
-item7       & 96.6\% & 130 & item15   & 96.6\% & 133 \\
-item7a      & 95.8\% & 129 & item16   & 86.4\% & 106 \\
-item8       & 98.7\% & 130 & signatures & 92.4\% & 105 \\
+item1       & 99.3\% & 131 & item9    & 99.3\% & 129 \\
+item1a      & 99.2\% & 132 & item9a   & 100.0\% & 131 \\
+item1b      & 99.2\% & 126 & item9b   & 97.8\% & 126 \\
+item2       & 99.2\% & 128 & item10   & 99.2\% & 131 \\
+item3       & 99.6\% & 132 & item11   & 99.4\% & 130 \\
+item4       & 98.4\% & 126 & item12   & 99.8\% & 131 \\
+item5       & 98.6\% & 129 & item13   & 98.5\% & 130 \\
+item6       & 97.1\% & 131 & item14   & 98.2\% & 130 \\
+item7       & 97.7\% & 130 & item15   & 100.0\% & 133 \\
+item7a      & 96.4\% & 129 & item16   & 95.8\% & 106 \\
+item8       & 98.6\% & 130 & signatures & 92.4\% & 105 \\
 \bottomrule
 \end{tabu}
 \end{table}
 
-Three categories fall below 95\%:
-
-\begin{itemize}
-  \item \textbf{Item 16} (86.4\%): Ground truth annotations are
-    inconsistent for this optional section---some filings annotate it
-    as empty, others include the full anchor-to-anchor HTML, and
-    still others include the entire document remainder. No single
-    extraction strategy satisfies all three annotation conventions.
-
-  \item \textbf{Signatures} (92.4\%): The pipeline outputs empty
-    strings (correct for 97/105 filings). The 8 filings with
-    non-empty ground truth contain 12M--80M characters spanning the
-    full remainder of the submission, including all exhibits.
-
-  \item \textbf{Item 6} (95.6\%): Marginal shortfall attributable
-    to boundary variations in the ``Selected Financial Data'' /
-    ``[Reserved]'' transition across filing formats.
-\end{itemize}
+Performance exceeds 95\% for 16 of the 17 item categories.
+Only \textbf{Signatures} (92.4\%) falls below this threshold.
+The pipeline outputs the full anchor-to-anchor slice for
+signatures when a TOC-referenced anchor exists; however, 8 filings
+in Set~1 have ground truth spanning 12M--80M characters (the
+full remainder of the submission including all exhibits), which
+is unmatchable by section-boundary methods. Items previously
+below 95\%---Item~16 and Item~6---improved through refined
+shared-anchor handling and the prefer-earlier DP scoring heuristic.
 
 \subsection{Error Analysis}
 
-The ten lowest-scoring filings (per-file $F_1 < 87\%$) fall into
-three categories:
+Of the 114 documents that fail the retrieval criterion, the failure
+modes decompose as follows:
 
-\begin{enumerate}
-  \item \textbf{Missing section boundaries} (4 filings): Filings
-    with non-standard HTML structure where TOC links do not
-    correspond to identifiable body anchors, causing entire sections
-    to be absorbed into adjacent items.
+\begin{itemize}
+  \item \textbf{Boundary errors only} (37 docs): All items are
+    present with no false positives, but at least one item has
+    $F_1 < 0.9$. The most affected items are signatures (15 docs,
+    where ground truth extends into exhibit content beyond the
+    10-K document boundary), item~16 (9 docs, inconsistent ground
+    truth conventions), and item~9B (5 docs, trailing Part~III
+    header absorption).
 
-  \item \textbf{Ground truth annotation artifacts} (3 filings):
-    Cases where the ground truth itself merges multiple items into
-    single entries or contains boundary errors (e.g., Item~4 annotated
-    with 239,743 characters of financial statement content).
+  \item \textbf{Missing items only} (21 docs): Dominated by
+    signatures (13 docs), where the filing lacks a TOC entry for
+    signatures and the fallback detector is suppressed to avoid
+    false positives.
 
-  \item \textbf{Shared Part~III anchors} (3 filings): Filings where
-    Items~10--14 share a single anchor with an incorporation-by-reference
-    statement, requiring heuristic disambiguation.
-\end{enumerate}
+  \item \textbf{False positives only} (10 docs): Extra predicted
+    items not in ground truth, primarily item~16 (4 docs) in
+    filings where the ground truth omits this optional section.
+
+  \item \textbf{Mixed failures} (46 docs): Combinations of the
+    above, often involving filings with non-standard HTML structure.
+\end{itemize}
+
+\noindent The dominant irreducible error source is the \emph{exhibit
+content boundary}: ground truth for signatures and item~16 sometimes
+extends into exhibit documents (\texttt{EX-31}, \texttt{EX-32}, etc.)
+that reside in separate \texttt{<DOCUMENT>} blocks within the SEC
+submission. Since the extraction pipeline operates on the primary
+10-K document only, this content is structurally inaccessible.
+Approximately 30 of the 114 failures are attributable to this
+limitation.
 
 
 % ===============================================================
@@ -354,9 +404,10 @@ three categories:
 % ===============================================================
 
 The extraction pipeline produces structured, per-item representations
-of 10-K filings at 96.3\% fidelity. This structured output serves as
-a foundation for autonomous agent systems that perform financial
-analysis tasks requiring targeted access to specific filing
+of 10-K filings at 97.5\% fidelity with 70.9\% document-level
+retrieval. This structured output serves as a foundation for
+autonomous agent systems that perform financial analysis tasks
+requiring targeted access to specific filing
 sections~\cite{zhang2023form10k}. We outline several agentic
 architectures that build upon the pipeline.
 
@@ -493,8 +544,9 @@ standardized item sections from SEC 10-K filings. The method exploits
 the anchor-link structure of HTML Tables of Contents, classifies
 anchors via a three-tier regex hierarchy, and resolves ordering
 constraints via dynamic programming. On 392 evaluated filings, the
-pipeline achieves a mean character-level $F_1$ of 96.3\%, with all
-three evaluation sets exceeding 95\%.
+pipeline achieves a mean character-level $F_1$ of 97.5\% and a
+document-level retrieval rate of 70.9\%, with all three evaluation
+sets exceeding 96\% mean $F_1$.
 
 The high-fidelity, per-item structured output produced by this
 pipeline serves as an enabling primitive for agentic financial
