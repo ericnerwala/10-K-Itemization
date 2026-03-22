@@ -129,7 +129,7 @@ TITLE_PATTERNS = [
     ("item6",   re.compile(r'\bselected\s+(?:consolidated\s+)?financial\s+data\b', re.I)),
     ("item6",   re.compile(r'\b\[reserved\]', re.I)),
     ("item7",   re.compile(r"\bmanagement'?s?\s+discussion\s+and\s+analysis\b", re.I)),
-    ("item7a",  re.compile(r'\bquantitative\s+and\s+qualitative\s+disclosures?\s+about\s+market\s+risk\b', re.I)),
+    ("item7a",  re.compile(r'\bquantitative\s+and\s+qualitative\s+disclosures?\s+about\s+market\s+risk', re.I)),
     ("item8",   re.compile(r'\bfinancial\s+statements?\s+and\s+supplementary\s+data\b', re.I)),
     ("item9",   re.compile(r'\bchanges?\s+in\s+and\s+disagreements?\b', re.I)),
     ("item9a",  re.compile(r'\bcontrols?\s+and\s+procedures?\b', re.I)),
@@ -145,6 +145,7 @@ TITLE_PATTERNS = [
     # Part IV items
     ("item15",  re.compile(r'\bexhibits?\b.*\bfinancial\s+statement\s+schedules?\b', re.I)),
     ("item15",  re.compile(r'\bfinancial\s+statement\s+schedules?\b.*\bexhibits?\b', re.I)),
+    ("item15",  re.compile(r'\bexhibits?\s+and\s+financial\s+statements?\b', re.I)),
     ("item16",  re.compile(r'\bform\s+10-k\s+summary\b', re.I)),
     ("item16",  re.compile(r'\b10-k\s+summary\b', re.I)),
     # Cross-reference index
@@ -267,6 +268,26 @@ def extract_10k_text(filepath: str) -> str:
     return content
 
 
+def _extract_10k_full(filepath: str) -> tuple[str, str, int]:
+    """Returns (10k_html, full_file_content, text_start_offset_in_file)."""
+    with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+        content = f.read()
+
+    doc_pattern = re.compile(
+        r'<DOCUMENT>(.*?)</DOCUMENT>', re.DOTALL | re.IGNORECASE)
+    type_pattern = re.compile(r'<TYPE>\s*(10-K(?:/A)?)\s*\n', re.IGNORECASE)
+    text_pattern = re.compile(r'<TEXT>(.*)', re.DOTALL | re.IGNORECASE)
+
+    for m in doc_pattern.finditer(content):
+        doc_block = m.group(1)
+        if type_pattern.search(doc_block):
+            text_match = text_pattern.search(doc_block)
+            if text_match:
+                return text_match.group(1), content, m.start(1) + text_match.start(1)
+
+    return content, content, 0
+
+
 # ---------------------------------------------------------------------------
 # Step 2: Collect all anchor IDs referenced from TOC links
 # ---------------------------------------------------------------------------
@@ -339,6 +360,30 @@ def parse_toc_links(html_text: str, referenced_ids: set) -> dict:
 
         # Classify the link text
         item_name = classify_item_text(link_text)
+
+        # Fallback: if link text is a page number (short, mostly digits),
+        # look at the surrounding text for item classification.
+        # Common TOC patterns:
+        #   1. Same cell: "Item 1A. Risk Factors ... <a href="#id">35</a>"
+        #   2. Table row: <td>Item 1A. Risk Factors</td><td><a href="#id">35</a></td>
+        if not item_name and len(link_text) <= 6 and re.match(r'\d+\s*$', link_text):
+            before_start = max(0, m.start() - 1000)
+            before_html = html_text[before_start:m.start()]
+
+            # Strategy 1: look in the same table row (<tr>...</tr>)
+            tr_match = before_html.rfind('<tr')
+            if tr_match >= 0:
+                row_html = before_html[tr_match:]
+                row_text = normalize_text(re.sub(r'<[^>]+>', ' ', row_html))
+                item_name = classify_item_text(row_text)
+
+            # Strategy 2: look in the text just before this link (same cell/div)
+            if not item_name:
+                last_block = re.split(r'</a>', before_html, flags=re.I)
+                if last_block:
+                    line_text = normalize_text(re.sub(r'<[^>]+>', ' ', last_block[-1]))
+                    item_name = classify_item_text(line_text)
+
         if item_name:
             # For each item, keep the FIRST TOC link (TOC order is authoritative)
             if item_name not in toc_items:
@@ -825,22 +870,31 @@ _TRAILING_ANCHOR_RE = re.compile(
 )
 
 
-def extract_item_slices(html_text: str, anchors: list) -> dict:
+def extract_item_slices(html_text: str, anchors: list,
+                        full_content: str = None,
+                        text_start_in_file: int = 0) -> dict:
     """
     Given sorted (offset, item_name, anchor_id) list, slice html_text
     between consecutive anchors. Returns {item_name: html_slice}
+
+    When full_content is provided, the LAST item extends to end-of-file
+    (GT convention: last item includes all remaining file content).
     """
     slices = {}
     for i, (start_offset, item_name, _) in enumerate(anchors):
         if i + 1 < len(anchors):
             next_offset = anchors[i + 1][0]
-            # End at the </div> that closes the wrapper around next anchor
             end_offset = _find_wrapper_end(html_text, next_offset)
+            html_slice = html_text[start_offset:end_offset]
         else:
-            body_end = html_text.rfind('</body>')
-            end_offset = body_end if body_end > start_offset else len(html_text)
-
-        html_slice = html_text[start_offset:end_offset]
+            # LAST item: extend to EOF if full content available
+            if full_content is not None and full_content is not html_text:
+                abs_offset = text_start_in_file + start_offset
+                html_slice = full_content[abs_offset:]
+            else:
+                body_end = html_text.rfind('</body>')
+                end_offset = body_end if body_end > start_offset else len(html_text)
+                html_slice = html_text[start_offset:end_offset]
 
         # Fix START: strip </div> after <a id="..."></a> at the beginning
         html_slice = _fix_anchor_wrapper(html_slice)
@@ -1123,6 +1177,101 @@ def process_file(txt_path: str) -> dict:
 
     # Detect Part III incorporation by reference: emit empty placeholders
     # for items 10-14 when none were found via anchors
+    found_items = {k.split('#', 1)[1] for k in result}
+    part3_placeholders = _detect_part3_incorporation(html_text, found_items)
+    for item_name in sorted(part3_placeholders):
+        key = f"{accession}#{item_name}"
+        result.setdefault(key, '')
+
+    return result
+
+
+def process_file_extended(txt_path: str) -> dict:
+    """
+    Extended extraction: last item extends to end-of-file (GT convention).
+    Use for evaluation; use process_file for lightweight extraction.
+    """
+    accession = Path(txt_path).stem
+    html_text, full_content, text_start = _extract_10k_full(txt_path)
+    if not html_text:
+        return {}
+
+    referenced_ids = collect_toc_referenced_ids(html_text)
+    if not referenced_ids:
+        return {}
+    toc_mappings, anchor_to_items = parse_toc_links(html_text, referenced_ids)
+    id_positions = find_all_id_elements(html_text, referenced_ids)
+    if not id_positions:
+        return {}
+    anchors = classify_anchors(html_text, id_positions, toc_mappings, anchor_to_items)
+    if not anchors:
+        return {}
+
+    # Heading scan fallback (same as process_file)
+    if toc_mappings:
+        assigned_items = {item for _, item, _ in anchors}
+        for toc_item in sorted(set(toc_mappings) - assigned_items - {'signatures'}):
+            item_idx = ITEM_SEQ_INDEX.get(toc_item)
+            if item_idx is None:
+                continue
+            prev_off = 0
+            next_off = len(html_text)
+            for a_off, a_item, _ in anchors:
+                a_idx = ITEM_SEQ_INDEX.get(a_item, -1)
+                if a_idx < item_idx:
+                    prev_off = max(prev_off, a_off)
+                elif a_idx > item_idx:
+                    next_off = min(next_off, a_off)
+            if next_off <= prev_off:
+                continue
+            search_region = html_text[prev_off:next_off]
+            search_text = normalize_text(re.sub(r'<[^>]+>', ' ', search_region))
+            for pat_name, pat in ITEM_PATTERNS:
+                if pat_name != toc_item:
+                    continue
+                m = pat.search(search_text)
+                if m and m.start() > 20:
+                    text_len = len(search_text)
+                    if text_len > 0:
+                        html_pos = prev_off + int(m.start() / text_len * len(search_region))
+                        anchors.append((html_pos, toc_item, f'__heading_scan_{toc_item}__'))
+                        anchors.sort(key=lambda x: x[0])
+                break
+
+    # Slice with full content for last item
+    slices = extract_item_slices(html_text, anchors,
+                                 full_content=full_content,
+                                 text_start_in_file=text_start)
+    placeholder_items = _shared_anchor_placeholders(anchor_to_items, slices)
+
+    sig_has_real_anchor = any(
+        item == 'signatures' and aid != '__fallback_sig__'
+        for _, item, aid in anchors
+    )
+    sig_in_toc = toc_mappings and 'signatures' in toc_mappings
+    sig_is_unreferenced = not sig_has_real_anchor and not sig_in_toc
+
+    result = {}
+    for item_name, html_slice in slices.items():
+        key = f"{accession}#{item_name}"
+        if item_name == 'signatures':
+            if sig_is_unreferenced:
+                continue
+            result[key] = html_slice
+        elif item_name == 'item16':
+            if (sig_is_unreferenced
+                    and _is_placeholder_item16(html_slice)
+                    and len(html_slice) > 10000):
+                result[key] = ''
+            else:
+                result[key] = html_slice
+        else:
+            result[key] = html_slice
+
+    for item_name in sorted(placeholder_items):
+        key = f"{accession}#{item_name}"
+        result.setdefault(key, '')
+
     found_items = {k.split('#', 1)[1] for k in result}
     part3_placeholders = _detect_part3_incorporation(html_text, found_items)
     for item_name in sorted(part3_placeholders):

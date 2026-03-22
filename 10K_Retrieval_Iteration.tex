@@ -1,0 +1,100 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{float}
+\usepackage{enumitem}
+\usepackage{lastpage}
+
+\hypersetup{colorlinks=true,linkcolor=black,urlcolor=blue,citecolor=black}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small Retrieval Rate Iteration Report}
+\fancyhead[R]{\small \thepage/\pageref{LastPage}}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\begin{document}
+
+\begin{center}
+{\small\scshape Technical Report}\\[2pt]
+\rule{\textwidth}{0.5pt}\\[12pt]
+{\LARGE\bfseries Improving Document-Level Retrieval Rate\\[6pt]
+for SEC 10-K Item Extraction}\\[12pt]
+Eric Bi\\
+March 21, 2026\\[8pt]
+\end{center}
+
+\vspace{4pt}
+\noindent
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textit{Version} & \textit{Date} & \textit{Comments}\\
+\midrule
+1.0 & March 21, 2026 & Initial iteration report: 70.9\% $\to$ 77.0\%\\
+\bottomrule
+\end{tabular}
+
+\vspace{12pt}
+\begin{center}\textbf{Abstract}\end{center}
+
+\noindent
+We improve the document-level retrieval rate of the anchor-based 10-K item extraction pipeline from \textbf{70.9\%} (278/392) to \textbf{77.0\%} (302/392). Two changes account for all gains: (1)~a TOC link classification fix that handles page-number-only links by examining surrounding table-row context (+22~documents), and (2)~an end-of-file extension for the last extracted item matching the ground truth annotation convention (+2~documents).
+
+%% =====================================================================
+\section{Approach}
+%% =====================================================================
+
+\subsection{Root Cause: Page-Number TOC Links}
+
+SEC filings use two Table of Contents link patterns. In \textbf{descriptive links}, the anchor text contains the item description (e.g., \texttt{<a href="\#id">Item~1A. Risk Factors</a>}); our classifier handles these correctly. In \textbf{page-number links}, the description appears in a separate table cell with only the page number as anchor text:
+
+\begin{verbatim}
+  <td>Item 1A. Risk Factors</td>
+  <td><a href="#id">35</a></td>
+\end{verbatim}
+
+\noindent
+The baseline \texttt{parse\_toc\_links} classifies the link text (``35'') and finds no match, leaving the anchor unclassified.
+
+\subsection{Fix 1: Page-Number TOC Link Classification (+22 docs)}
+
+When the link text is $\leq 6$ characters and matches \verb|\d+|, the function looks backward in the HTML using two strategies:
+
+\begin{enumerate}[nosep]
+    \item \textbf{Table-row context:} Find the nearest preceding \texttt{<tr} tag and classify all text in that row.
+    \item \textbf{Same-cell context:} Split on the last \texttt{</a>} tag and classify the remaining text.
+\end{enumerate}
+
+\subsection{Fix 2: Last-Item End-of-File Extension (+2 docs)}
+
+Ground truth for the last item in each filing extends to the end of the raw SEC submission file (40--80\,MB), not just the 10-K \texttt{<TEXT>} block. We added \texttt{process\_file\_extended()}, which maps the last item's anchor offset into the full file and slices to EOF.
+
+%% =====================================================================
+\section{Results}
+%% =====================================================================
+
+\begin{table}[H]
+\centering
+\caption{Document-level retrieval rate before and after improvements.}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Set} & \textbf{Baseline} & \textbf{After fixes} & \textbf{Change}\\
+\midrule
+Set 1 & 99/133 (74.4\%) & 108/133 (81.2\%) & +9\\
+Set 2 & 90/132 (68.2\%) & 97/132 (73.5\%) & +7\\
+Set 3 & 89/127 (70.1\%) & 97/127 (76.4\%) & +8\\
+\midrule
+\textbf{Overall} & \textbf{278/392 (70.9\%)} & \textbf{302/392 (77.0\%)} & \textbf{+24}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent
+The remaining 90 failing documents are dominated by signatures boundary mismatches (20~docs), item16 boundary errors (14~docs), and DP solver anchor selection disagreements with GT (19~docs). Diagnostic analysis indicates that fixing all remaining missing-item and false-positive errors would yield 81.9\% (321/392); fixing all boundary errors would yield 86.7\% (340/392).
+
+\end{document}
